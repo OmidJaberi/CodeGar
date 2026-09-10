@@ -14,18 +14,19 @@ def generate_django(application: Application, output: str | Path) -> None:
     app.mkdir(parents=True, exist_ok=True)
 
     _write(output / "requirements.txt", "Django>=5.0,<6.0\n")
-    _write(backend / "manage.py", _manage_py(application.name))
+    _write(backend / "manage.py", _manage_py())
     _write(config / "__init__.py", "")
     _write(config / "settings.py", _settings_py(application.name))
     _write(config / "urls.py", _urls_py(application.name))
-    _write(config / "wsgi.py", _wsgi_py(application.name))
-    _write(config / "asgi.py", _asgi_py(application.name))
+    _write(config / "wsgi.py", _wsgi_py())
+    _write(config / "asgi.py", _asgi_py())
 
     _write(app / "__init__.py", "")
     _write(app / "apps.py", _apps_py(application.name))
     _write(app / "models.py", _models_py(application))
-    _write(app / "admin.py", _admin_py(application.name))
-    _write(app / "views.py", "")
+    _write(app / "admin.py", _admin_py(application))
+    _write(app / "views.py", _views_py(application))
+    _write(app / "urls.py", _app_urls_py(application))
     _write(app / "tests.py", "")
 
 
@@ -33,8 +34,8 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _manage_py(app_name: str) -> str:
-    return f'''#!/usr/bin/env python
+def _manage_py() -> str:
+    return '''#!/usr/bin/env python
 import os
 import sys
 
@@ -134,17 +135,18 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
 def _urls_py(app_name: str) -> str:
-    return '''from django.contrib import admin
-from django.urls import path
+    return f'''from django.contrib import admin
+from django.urls import include, path
 
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("", include("{app_name}.urls")),
 ]
 '''
 
 
-def _wsgi_py(app_name: str) -> str:
+def _wsgi_py() -> str:
     return '''import os
 
 from django.core.wsgi import get_wsgi_application
@@ -156,7 +158,7 @@ application = get_wsgi_application()
 '''
 
 
-def _asgi_py(app_name: str) -> str:
+def _asgi_py() -> str:
     return '''import os
 
 from django.core.asgi import get_asgi_application
@@ -169,10 +171,12 @@ application = get_asgi_application()
 
 
 def _apps_py(app_name: str) -> str:
+    class_name = "".join(part.capitalize() for part in app_name.split("_"))
+
     return f'''from django.apps import AppConfig
 
 
-class {app_name.title().replace("_", "")}Config(AppConfig):
+class {class_name}Config(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "{app_name}"
 '''
@@ -193,10 +197,8 @@ def _models_py(application: Application) -> str:
 
 
 def _model(entity: Entity) -> list[str]:
-    class_name = entity.name
-
     lines = [
-        f"class {class_name}(models.Model):",
+        f"class {entity.name}(models.Model):",
     ]
 
     if not entity.fields:
@@ -209,7 +211,7 @@ def _model(entity: Entity) -> list[str]:
         [
             "",
             "    def __str__(self):",
-            f'        return str(self.{_display_field(entity)})',
+            f"        return str(self.{_display_field(entity)})",
         ]
     )
 
@@ -233,26 +235,9 @@ def _django_field(field: Field) -> str:
     if field.default is not None:
         options.append(f"default={field.default!r}")
 
-    suffix = ""
-
-    if options:
-        suffix = ", " + ", ".join(options)
+    suffix = ", " + ", ".join(options) if options else ""
 
     if field.type == FieldType.STRING:
-        string_options = []
-
-        if not field.required:
-            string_options.append("blank=True")
-
-        if field.default is not None:
-            string_options.append(f"default={field.default!r}")
-
-        suffix = (
-            ", " + ", ".join(string_options)
-            if string_options
-            else ""
-        )
-
         return f"models.CharField(max_length=255{suffix})"
 
     if field.type == FieldType.INTEGER:
@@ -277,7 +262,13 @@ def _django_field(field: Field) -> str:
         )
 
         if options:
-            return f"models.CharField(max_length=255, choices=[{choices}], {', '.join(options)})"
+            return (
+                f"models.CharField("
+                f"max_length=255, "
+                f"choices=[{choices}], "
+                f"{', '.join(options)}"
+                f")"
+            )
 
         return f"models.CharField(max_length=255, choices=[{choices}])"
 
@@ -296,14 +287,200 @@ def _django_field(field: Field) -> str:
             reference_options.append(f"default={field.default!r}")
 
         return (
-            f"models.ForeignKey("
-            f'"{field.entity}", '
-            f"{', '.join(reference_options)}"
-            f")"
+            f'models.ForeignKey("{field.entity}", '
+            f"{', '.join(reference_options)})"
         )
 
     raise ValueError(f"Unsupported field type: {field.type}")
 
 
-def _admin_py(app_name: str) -> str:
-    return "from django.contrib import admin\n"
+def _views_py(application: Application) -> str:
+    lines = [
+        "import json",
+        "",
+        "from django.http import JsonResponse",
+        "from django.views.decorators.csrf import csrf_exempt",
+        "",
+        f"from .models import {', '.join(entity.name for entity in application.entities)}",
+        "",
+        "",
+    ]
+
+    for entity in application.entities:
+        lines.extend(_entity_views(entity))
+        lines.append("")
+
+    for page in application.pages:
+        lines.extend(_page_view(page))
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _entity_views(entity: Entity) -> list[str]:
+    name = entity.name
+
+    return [
+        "@csrf_exempt",
+        f"def {name.lower()}_list(request):",
+        "    if request.method == \"GET\":",
+        f"        objects = {name}.objects.all()",
+        "        return JsonResponse(",
+        "            {\"data\": [_serialize_object(obj) for obj in objects]}"
+        "        )",
+        "",
+        "    if request.method == \"POST\":",
+        "        try:",
+        "            data = json.loads(request.body or \"{}\")",
+        "        except json.JSONDecodeError:",
+        "            return JsonResponse({\"error\": \"Invalid JSON\"}, status=400)",
+        "",
+        f"        obj = {name}()",
+        "        _update_object(obj, data)",
+        "        obj.save()",
+        "        return JsonResponse(",
+        "            {\"data\": _serialize_object(obj)},",
+        "            status=201,",
+        "        )",
+        "",
+        "    return JsonResponse(",
+        "        {\"error\": \"Method not allowed\"},",
+        "        status=405,",
+        "    )",
+        "",
+        "",
+        "@csrf_exempt",
+        f"def {name.lower()}_detail(request, pk):",
+        f"    try:",
+        f"        obj = {name}.objects.get(pk=pk)",
+        "    except " + name + ".DoesNotExist:",
+        "        return JsonResponse({\"error\": \"Not found\"}, status=404)",
+        "",
+        "    if request.method == \"GET\":",
+        "        return JsonResponse({\"data\": _serialize_object(obj)})",
+        "",
+        "    if request.method in (\"PUT\", \"PATCH\"):",
+        "        try:",
+        "            data = json.loads(request.body or \"{}\")",
+        "        except json.JSONDecodeError:",
+        "            return JsonResponse({\"error\": \"Invalid JSON\"}, status=400)",
+        "",
+        "        _update_object(obj, data)",
+        "        obj.save()",
+        "        return JsonResponse({\"data\": _serialize_object(obj)})",
+        "",
+        "    if request.method == \"DELETE\":",
+        "        obj.delete()",
+        "        return JsonResponse({\"data\": None})",
+        "",
+        "    return JsonResponse(",
+        "        {\"error\": \"Method not allowed\"},",
+        "        status=405,",
+        "    )",
+        "",
+        "",
+        "def _serialize_object(obj):",
+        "    data = {\"id\": obj.pk}",
+        "    for field in obj._meta.fields:",
+        "        if field.name == \"id\":",
+        "            continue",
+        "        value = getattr(obj, field.name)",
+        "",
+        "        if hasattr(value, \"isoformat\"):",
+        "            value = value.isoformat()",
+        "",
+        "        if field.is_relation:",
+        "            data[field.name] = getattr(obj, field.name + \"_id\")",
+        "        else:",
+        "            data[field.name] = value",
+        "",
+        "    return data",
+        "",
+        "",
+        "def _update_object(obj, data):",
+        "    for field in obj._meta.fields:",
+        "        if field.name == \"id\" or field.name not in data:",
+        "            continue",
+        "",
+        "        if field.is_relation:",
+        "            setattr(obj, field.name + \"_id\", data[field.name])",
+        "        else:",
+        "            setattr(obj, field.name, data[field.name])",
+    ]
+
+
+def _page_view(page) -> list[str]:
+    function_name = _page_function_name(page.name)
+
+    return [
+        f"def {function_name}(request):",
+        "    return JsonResponse(",
+        "        {",
+        f'            "page": "{page.name}",',
+        f'            "route": "{page.route}",',
+        f'            "type": "{page.type.value}",',
+        f'            "entity": "{page.entity}",',
+        "        }",
+        "    )",
+    ]
+
+
+def _page_function_name(name: str) -> str:
+    return (
+        name.lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    ) + "_page"
+
+
+def _app_urls_py(application: Application) -> str:
+    lines = [
+        "from django.urls import path",
+        "",
+        "from . import views",
+        "",
+        "",
+        "urlpatterns = [",
+    ]
+
+    for entity in application.entities:
+        name = entity.name.lower()
+
+        lines.extend(
+            [
+                f'    path("api/{name}/", views.{name}_list, name="{name}-list"),',
+                f'    path("api/{name}/<int:pk>/", views.{name}_detail, name="{name}-detail"),',
+            ]
+        )
+
+    for page in application.pages:
+        function_name = _page_function_name(page.name)
+
+        route = page.route.lstrip("/")
+
+        lines.append(
+            f'    path("{route}", views.{function_name}, name="{function_name}"),'
+        )
+
+    lines.append("]")
+
+    return "\n".join(lines) + "\n"
+
+
+def _admin_py(application: Application) -> str:
+    lines = [
+        "from django.contrib import admin",
+        "",
+    ]
+
+    for entity in application.entities:
+        lines.append(f"from .models import {entity.name}")
+
+    lines.append("")
+
+    for entity in application.entities:
+        lines.append(f"admin.site.register({entity.name})")
+
+    lines.append("")
+
+    return "\n".join(lines)
