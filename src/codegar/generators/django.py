@@ -239,6 +239,20 @@ def _django_field(field: Field) -> str:
         suffix = ", " + ", ".join(options)
 
     if field.type == FieldType.STRING:
+        string_options = []
+
+        if not field.required:
+            string_options.append("blank=True")
+
+        if field.default is not None:
+            string_options.append(f"default={field.default!r}")
+
+        suffix = (
+            ", " + ", ".join(string_options)
+            if string_options
+            else ""
+        )
+
         return f"models.CharField(max_length=255{suffix})"
 
     if field.type == FieldType.INTEGER:
