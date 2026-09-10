@@ -275,3 +275,116 @@ def test_unsupported_field_type_fails_generation(tmp_path):
 
     with pytest.raises(ValueError, match="Unsupported field type"):
         generate_django(application, tmp_path)
+
+def read_generated(output: Path, relative_path: str) -> str:
+    return (output / relative_path).read_text()
+
+
+def test_generates_views(tmp_path):
+    output = generate(tmp_path)
+
+    views = read_generated(
+        output,
+        "backend/inventory/views.py",
+    )
+
+    assert "def product_list(request):" in views
+    assert "def product_detail(request, pk):" in views
+    assert "def stockentry_list(request):" in views
+    assert "def stockentry_detail(request, pk):" in views
+
+
+def test_generates_entity_api_routes(tmp_path):
+    output = generate(tmp_path)
+
+    urls = read_generated(
+        output,
+        "backend/inventory/urls.py",
+    )
+
+    assert 'path("api/product/", views.product_list' in urls
+    assert 'path("api/product/<int:pk>/", views.product_detail' in urls
+
+    assert 'path("api/stockentry/", views.stockentry_list' in urls
+    assert 'path("api/stockentry/<int:pk>/", views.stockentry_detail' in urls
+
+
+def test_generates_page_routes(tmp_path):
+    output = generate(tmp_path)
+
+    urls = read_generated(
+        output,
+        "backend/inventory/urls.py",
+    )
+
+    assert (
+        'path("products", views.products_page, name="products_page")'
+        in urls
+    )
+
+
+def test_generates_page_views(tmp_path):
+    output = generate(tmp_path)
+
+    views = read_generated(
+        output,
+        "backend/inventory/views.py",
+    )
+
+    assert "def products_page(request):" in views
+    assert '"page": "Products"' in views
+    assert '"route": "/products"' in views
+    assert '"type": "list"' in views
+    assert '"entity": "Product"' in views
+
+
+def test_includes_app_urls_in_root_urls(tmp_path):
+    output = generate(tmp_path)
+
+    urls = read_generated(
+        output,
+        "backend/config/urls.py",
+    )
+
+    assert 'path("", include("inventory.urls"))' in urls
+
+
+def test_generates_all_crud_methods(tmp_path):
+    output = generate(tmp_path)
+
+    views = read_generated(
+        output,
+        "backend/inventory/views.py",
+    )
+
+    assert 'if request.method == "GET":' in views
+    assert 'if request.method == "POST":' in views
+    assert 'if request.method in ("PUT", "PATCH"):' in views
+    assert 'if request.method == "DELETE":' in views
+
+
+def test_generates_json_serialization(tmp_path):
+    output = generate(tmp_path)
+
+    views = read_generated(
+        output,
+        "backend/inventory/views.py",
+    )
+
+    assert "def _serialize_object(obj):" in views
+    assert 'data = {"id": obj.pk}' in views
+    assert "value.isoformat()" in views
+
+
+def test_generates_reference_serialization(tmp_path):
+    output = generate(tmp_path)
+
+    views = read_generated(
+        output,
+        "backend/inventory/views.py",
+    )
+
+    assert (
+        'data[field.name] = getattr(obj, field.name + "_id")'
+        in views
+    )
