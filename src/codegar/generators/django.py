@@ -9,9 +9,11 @@ def generate_django(application: Application, output: str | Path) -> None:
     backend = output / "backend"
     config = backend / "config"
     app = backend / application.name
+    migrations = app / "migrations"
 
     config.mkdir(parents=True, exist_ok=True)
     app.mkdir(parents=True, exist_ok=True)
+    migrations.mkdir(parents=True, exist_ok=True)
 
     _write(output / "requirements.txt", "Django>=5.0,<6.0\n")
     _write(backend / "manage.py", _manage_py())
@@ -28,6 +30,9 @@ def generate_django(application: Application, output: str | Path) -> None:
     _write(app / "views.py", _views_py(application))
     _write(app / "urls.py", _app_urls_py(application))
     _write(app / "tests.py", "")
+
+    _write(migrations / "__init__.py", "")
+    _write(migrations / "0001_initial.py", _initial_migration(application))
 
 
 def _write(path: Path, content: str) -> None:
@@ -484,3 +489,129 @@ def _admin_py(application: Application) -> str:
     lines.append("")
 
     return "\n".join(lines)
+
+
+def _initial_migration(application: Application) -> str:
+    lines = [
+        "from django.db import migrations, models",
+        "import django.db.models.deletion",
+        "",
+        "",
+        "class Migration(migrations.Migration):",
+        "",
+        "    initial = True",
+        "",
+        "    dependencies = []",
+        "",
+        "    operations = [",
+    ]
+
+    for entity in application.entities:
+        lines.extend(_migration_create_model(entity))
+
+    lines.extend([
+        "    ]",
+        "",
+    ])
+
+    return "\n".join(lines)
+
+
+def _migration_field(field: Field) -> list[str]:
+    options = []
+
+    if not field.required:
+        if field.type == FieldType.STRING:
+            options.append("blank=True")
+        else:
+            options.extend(["blank=True", "null=True"])
+
+    if field.default is not None:
+        options.append(f"default={field.default!r}")
+
+    if field.type == FieldType.STRING:
+        declaration = "models.CharField(max_length=255"
+
+    elif field.type == FieldType.INTEGER:
+        declaration = "models.IntegerField"
+
+    elif field.type == FieldType.NUMBER:
+        declaration = "models.FloatField"
+
+    elif field.type == FieldType.BOOLEAN:
+        declaration = "models.BooleanField"
+
+    elif field.type == FieldType.DATE:
+        declaration = "models.DateField"
+
+    elif field.type == FieldType.DATETIME:
+        declaration = "models.DateTimeField"
+
+    elif field.type == FieldType.ENUM:
+        choices = [(value, value) for value in field.values]
+        declaration = (
+            f"models.CharField(max_length=255, choices={choices!r}"
+        )
+
+    elif field.type == FieldType.REFERENCE:
+        declaration = (
+            f"models.ForeignKey('{field.entity}', on_delete=models.CASCADE"
+        )
+
+    else:
+        raise ValueError(f"Unsupported field type: {field.type}")
+
+    if field.type == FieldType.STRING:
+        if options:
+            declaration += ", " + ", ".join(options)
+        declaration += ")"
+
+    elif field.type == FieldType.ENUM:
+        if options:
+            declaration += ", " + ", ".join(options)
+        declaration += ")"
+
+    elif field.type == FieldType.REFERENCE:
+        if options:
+            declaration += ", " + ", ".join(options)
+        declaration += ")"
+
+    else:
+        if options:
+            declaration += "(" + ", ".join(options) + ")"
+        else:
+            declaration += "()"
+
+    return [
+        "                (",
+        f"                    {field.name!r},",
+        f"                    {declaration},",
+        "                ),",
+    ]
+
+
+def _migration_create_model(entity: Entity) -> list[str]:
+    lines = [
+        "        migrations.CreateModel(",
+        f"            name={entity.name!r},",
+        "            fields=[",
+        "                (",
+        "                    'id',",
+        "                    models.BigAutoField(",
+        "                        auto_created=True,",
+        "                        primary_key=True,",
+        "                        serialize=False,",
+        "                        verbose_name='ID',",
+        "                    ),",
+        "                ),",
+    ]
+
+    for field in entity.fields:
+        lines.extend(_migration_field(field))
+
+    lines.extend([
+        "            ],",
+        "        ),",
+    ])
+
+    return lines
