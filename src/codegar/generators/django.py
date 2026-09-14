@@ -561,21 +561,14 @@ def _migration_field(field: Field) -> list[str]:
     else:
         raise ValueError(f"Unsupported field type: {field.type}")
 
-    if field.type == FieldType.STRING:
+    if field.type in {
+        FieldType.STRING,
+        FieldType.ENUM,
+        FieldType.REFERENCE,
+    }:
         if options:
             declaration += ", " + ", ".join(options)
         declaration += ")"
-
-    elif field.type == FieldType.ENUM:
-        if options:
-            declaration += ", " + ", ".join(options)
-        declaration += ")"
-
-    elif field.type == FieldType.REFERENCE:
-        if options:
-            declaration += ", " + ", ".join(options)
-        declaration += ")"
-
     else:
         if options:
             declaration += "(" + ", ".join(options) + ")"
