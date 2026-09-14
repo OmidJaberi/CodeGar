@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from codegar.generators.django import generate_django
-from codegar.parser.json import parse_architecture
+from codegar.parser.json import parse_architecture, parse_architecture_file
 from codegar.validator.validate import ValidationError, validate_application
 
 
@@ -388,3 +388,40 @@ def test_generates_reference_serialization(tmp_path):
         'data[field.name] = getattr(obj, field.name + "_id")'
         in views
     )
+
+
+def test_generates_habit_tracker_initial_migration(tmp_path):
+    architecture = Path("examples/habit_tracker/architecture.json")
+    application = parse_architecture_file(architecture)
+
+    validate_application(application)
+    generate_django(application, tmp_path)
+
+    migration = (
+        tmp_path
+        / "backend"
+        / "habit_tracker"
+        / "migrations"
+        / "0001_initial.py"
+    )
+
+    assert migration.exists()
+
+    content = migration.read_text()
+    normalized = " ".join(content.split())
+
+    assert "migrations.CreateModel(" in content
+    assert "name='Habit'," in content
+
+    # name: string, required
+    assert "'name', models.CharField(max_length=255)" in normalized
+
+    # active: boolean, required, default=True
+    assert "'active', models.BooleanField(default=True)" in normalized
+
+    # frequency: enum, required
+    assert (
+        "'frequency', models.CharField("
+        "max_length=255, "
+        "choices=[('daily', 'daily'), ('weekly', 'weekly')])"
+    ) in normalized
